@@ -4,7 +4,15 @@
 - Shape
 - Data types
 - Shape
-- 
+
+**Data Types**
+- previous owners: float para int
+- asdamage: float para bool
+- ✅ car id: index
+- ✅ year: float para int
+- ✅ na para 0
+  
+
 <br>
 
 <img width="600" height="3500" alt="Screenshot 2025-10-08 at 12 19 44" src="https://github.com/user-attachments/assets/8b26636c-43d7-411c-b425-c4cfec641a4a" />
