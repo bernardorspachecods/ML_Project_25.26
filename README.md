@@ -1,29 +1,11 @@
 ## Machine Learning Project
 
-**Pre processing**
-- Shape
-- Data types
-- Shape
+### TODO
+- MLP (aula stor)
+- Cross Validation
+- Perceber diferentes inputers, scalers, encoders
+- enssembles
 
-**Data Types**
-- previous owners: float para int
-- asdamage: float para bool
-- ✅ car id: index
-- ✅ year: float para int
-- ✅ na para 0
-  
-
-<br>
-
-<img width="600" height="3500" alt="Screenshot 2025-10-08 at 12 19 44" src="https://github.com/user-attachments/assets/8b26636c-43d7-411c-b425-c4cfec641a4a" />
-
-TODO
-- Enconding das categorias com o ordinal
-- Hold-out splti
-- Scalling 
-- Feature selection
-- model acessment
-- 
 <br><br>
 
 **Google Drive Link**
