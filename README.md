@@ -2,9 +2,8 @@
 
 ### TODO
 
-- Função tabela (Bruna)
+
 - Outline, estruturar o relatóri
-- MLP (aula stor)
 - Cross Validation
 - Perceber diferentes inputers, scalers, encoders
 - enssembles
