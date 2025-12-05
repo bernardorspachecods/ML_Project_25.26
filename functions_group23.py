@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.impute import SimpleImputer
+from sklearn.impute import KNNImputer
 from sklearn.preprocessing import RobustScaler, OrdinalEncoder
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
@@ -329,8 +329,8 @@ def impute_numeric_features(X_features_list, metric_features):
     Output:
         list: List of DataFrames with imputed values.
     """
-    # Initialize the imputer using the median strategy
-    imputer = SimpleImputer(strategy='median')
+    # Initialize the imputer using 'n_neighbors' = 10.
+    imputer = KNNImputer(n_neighbors=10)
 
     # Select the numeric features from the training set (assumed to be at index 0)
     X_train_numeric_to_fit = X_features_list[0][metric_features]
