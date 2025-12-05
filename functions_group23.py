@@ -13,7 +13,7 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from rapidfuzz import process, fuzz
 from tqdm import tqdm
 from IPython.display import display # Necessário para a função dict_to_results_df funcionar num script
-
+from tqdm_joblib import tqdm_joblib
 
 
 ########## Functions ##########
@@ -579,7 +579,7 @@ def aplicar_ordinal_encoder(X_train, X_val, X_test):
 
 
 
-def running_models(X_train, y_train, X_val, y_val):
+def running_models(models, X_train, y_train, X_val, y_val):
     """
     Trains and evaluates models defined in the global 'models' dictionary.
     
@@ -593,6 +593,8 @@ def running_models(X_train, y_train, X_val, y_val):
         None: Updates the global 'results' dictionary and prints metrics.
     """
     # Iterate over the global dictionary of models
+
+    results = {}
     for name, model in models.items():
         # Train the model using the training data
         model.fit(X_train, y_train)
@@ -615,6 +617,8 @@ def running_models(X_train, y_train, X_val, y_val):
         print(f"  R²:   {r2:.4f}")
         print(f"  MAE:  {mae:.2f}")
         print(f"  RMSE: {rmse:.2f}")
+
+    return results
 
 
 
@@ -694,8 +698,8 @@ def tune_models(models_params, X_train, y_train, cv, scoring='neg_mean_absolute_
         total_fits = n_iter * n_splits  # Calculate total fits for progress tracking
 
         # Fit the search algorithm to the training data
-        # with tqdm_joblib(tqdm(total=total_fits, desc=f"Random Search {name}", leave=False)):
-        search.fit(X_train, y_train)
+        with tqdm_joblib(tqdm(total=total_fits, desc=f"Random Search {name}", leave=False)):
+            search.fit(X_train, y_train)
 
         # Print the best score (negated because scoring is negative MAE) and best parameters
         print(f"Melhor score {name}: {-search.best_score_:.4f}")
