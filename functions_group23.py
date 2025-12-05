@@ -1,0 +1,707 @@
+########## Imports ############
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy import stats
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import RobustScaler, OrdinalEncoder
+from sklearn.model_selection import RandomizedSearchCV
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+from rapidfuzz import process, fuzz
+from tqdm import tqdm
+from IPython.display import display # Necessário para a função dict_to_results_df funcionar num script
+
+
+
+########## Functions ##########
+
+
+
+def strange_values_to_nan(f, column, limit):
+    """
+    Replaces values in a column that are less than or equal to a limit with NaN.
+
+    Arguments:
+        f (pd.DataFrame): The DataFrame containing the data.
+        column (str): The name of the column to check.
+        limit (float): The threshold value. Values <= this limit will be replaced with NaN.
+
+    Output:
+        None: The function modifies the DataFrame 'f' in-place.
+    """
+    # Create a boolean mask where True indicates "strange" values (<= limit)
+    strange_values = f[column] <= limit
+    
+    # Replace the identified values with NaN
+    f.loc[strange_values, column] = np.nan
+    
+    # Print the number of found strange values
+    print(f"Found {strange_values.sum()} strange values in {column}.")
+
+
+
+
+def pre_processing_metric(df):
+    """
+    Performs initial preprocessing of metric columns: index setting, type fixing, 
+    and cleaning strange values.
+
+    Arguments:
+        df (pd.DataFrame): The DataFrame to process.
+
+    Output:
+        None: Modifies the DataFrame in-place.
+    """
+    # Setting carID as index
+    df.set_index("carID", inplace=True)
+
+    # Fixing the types: convert to int if float/valid, then cast to nullable Int64
+    df["year"] = [int(i) if isinstance(i, float) and not pd.isna(i) else i for i in df["year"]]
+    df["year"] = df["year"].astype("Int64")
+    
+    df["previousOwners"] = [int(i) if isinstance(i, float) and not pd.isna(i) else i for i in df["previousOwners"]]
+    df["previousOwners"] = df["previousOwners"].astype("Int64")
+
+    # Converting strange values to nan using the helper function
+    strange_values_to_nan(df, "mileage", 0)
+    strange_values_to_nan(df, "tax", 0)
+    strange_values_to_nan(df, "mpg", 10)
+    strange_values_to_nan(df, "engineSize", 0.1)
+    strange_values_to_nan(df, "previousOwners", 0)
+
+    # Deleting column hasDamage because it has the same value in all rows
+    del df["hasDamage"]
+    
+    # Deleting column paintQuality% because the model needs to be capable of evaluating the price 
+    # of a car based on the user’s input without needing the car to be taken to a mechanic
+    del df["paintQuality%"]
+
+
+
+
+def build_valid_dic(column, valid_list, cuttoff):
+    """
+    Builds a dictionary mapping valid words to their fuzzy matches found in a column.
+
+    Arguments:
+        column (pd.Series): The data column to search in.
+        valid_list (list): List of valid strings to match against.
+        cuttoff (int): Minimum score for a match to be considered valid.
+
+    Output:
+        dict: A dictionary where keys are valid words and values are lists of found variations.
+    """
+    # First, clean the column and the valid list (lowercase, stripped)
+    unique_column_values = [str(v).strip().lower() for v in column.dropna().unique()]
+    
+    # Second, create the dict with the valid values initialized with empty lists
+    result = {valid_word: [] for valid_word in valid_list}
+
+    for valid in valid_list:
+        valid_lower = valid.lower()
+        # Use rapidfuzz to find all strings in the column that are similar to the valid word
+        fuzzy_matched_values = process.extract(
+            valid_lower,           # the check value
+            unique_column_values,  # the list that we are going to use to check
+            scorer=fuzz.token_sort_ratio,  # Use a scorer that handles out-of-order words
+            score_cutoff=cuttoff   # Minimum similarity score
+        )
+        for match_value, score, _ in fuzzy_matched_values:
+            # Add the matched value to our dictionary, but only if it's not an exact match
+            if match_value != valid_lower:
+                result[valid].append(match_value)
+
+    return result
+
+
+
+
+def replace_invalid_values(column, valid_dic):
+    """
+    Replaces invalid values in a column based on a mapping dictionary.
+
+    Arguments:
+        column (pd.Series): The column to correct.
+        valid_dic (dict): Dictionary mapping valid terms to their invalid variations.
+
+    Output:
+        list: A list of corrected values.
+    """
+    corrected = []
+    for val in column:
+        if pd.isna(val):
+            corrected.append(val)
+            continue
+            
+        valeu_cleaned = str(val).strip().lower()
+        found = False
+
+        # Check for an exact match (case-insensitive)
+        for key in valid_dic:
+            if valeu_cleaned == key.lower():
+                corrected.append(key)
+                found = True
+                break
+                
+        # Check for a fuzzy match in the variations list
+        if not found:
+            for valid_key, variations in valid_dic.items():
+                # Check if the cleaned value is one of the known variations
+                if valeu_cleaned in [v.lower() for v in variations]:
+                    corrected.append(valid_key)
+                    found = True
+                    break
+                    
+        # If no match found, keep the original value
+        if not found:
+            corrected.append(val)
+
+    return corrected
+
+
+
+
+def fill_nans_categorical(data, columns):
+    """
+    Fills NaN values in specified categorical columns with the string 'Unknown'.
+    
+    Arguments:
+        data (pd.DataFrame): The DataFrame.
+        columns (list): List of column names to fill.
+        
+    Output:
+        pd.DataFrame: The modified DataFrame.
+    """
+    # Iterate over the list of categorical columns provided
+    for col in columns:
+        # Fill missing values (NaN) in the current column with the string "Unknown"
+        data[col] = data[col].fillna("Unknown")
+    return data
+
+
+
+
+def dic_brand_modles(brands, models, valid_brands):
+    """
+    Builds a dictionary mapping each valid brand to all unique models associated with it.
+    
+    Arguments:
+        brands (pd.Series): Series containing brand names.
+        models (pd.Series): Series containing model names.
+        valid_brands (list): List of valid brands to include.
+        
+    Output:
+        dict: Dictionary {brand: [list of models]}.
+    """
+    # Initialize the result dictionary with valid brands as keys and empty lists as values
+    result = {brand: [] for brand in valid_brands}
+    
+    # Iterate through both brands and models simultaneously
+    for brand, model in zip(brands, models):
+        # Skip the iteration if either the brand or the model is missing (NaN)
+        if pd.isna(brand) or pd.isna(model):
+            continue
+            
+        # Clean the model name: convert to string, remove spaces, and make it lowercase
+        model_clean = str(model).strip().lower()
+        
+        # Check if the cleaned model is not already in the list for that brand
+        if model_clean not in result[brand]:
+            # Append the new unique model to the brand's list
+            result[brand].append(model_clean)
+
+    return result
+
+
+
+
+def pre_processing_non_metric(dic_col_valid, data):
+    """
+    Iteratively cleans non-metric columns using fuzzy matching.
+    
+    Arguments:
+        dic_col_valid (dict): Dictionary of valid values for each column.
+        data (pd.DataFrame): The DataFrame to clean.
+        
+    Output:
+        None: Modifies DataFrame in-place (and prints value counts on last iteration).
+    """
+    # Loop 3 times for iterative cleaning. 
+    # E.g., Pass 1 might turn 'fordd' into 'Ford'.
+    # Pass 2 can then use the cleaner list to find more complex variations.
+    for i in range(1, 4):
+        for key, values in dic_col_valid.items():
+            # Find all variations for each valid value
+            valid_dic = build_valid_dic(data[key], values, cuttoff=50)
+            # Replace those variations in the column
+            data[key] = replace_invalid_values(data[key], valid_dic)
+            if i == 3:  # On the final pass, print the value counts
+                print(data[key].value_counts())
+
+
+
+
+
+def valid_models_dict(data, brands, min_count=0):
+    """
+    Creates a dictionary of valid models for each brand, filtering by frequency.
+    
+    Arguments:
+        data (pd.DataFrame): The dataset.
+        brands (list): List of brands to process.
+        min_count (int): Minimum frequency for a model to be considered valid.
+        
+    Output:
+        dict: Dictionary of valid models per brand.
+    """
+    models_dict = {}
+    for brand in brands:
+        brands_frame = data[data["Brand"] == brand]
+        models_clean = brands_frame["model"].astype(str).str.strip().str.lower()
+
+        # Get all model names for this brand, sorted by frequency
+        models_count = models_clean.value_counts()
+        # Filter out very rare models
+        models_count = models_count[models_count >= min_count]
+        potential_models = models_count.index.tolist()
+        valid_models_for_brand = []
+
+        for model in potential_models:
+            is_truncated = False
+            # This logic checks if a longer, more specific model name already exists.
+            # It will be flagged as truncated and skipped.
+            for valid_model in valid_models_for_brand:
+                if valid_model.startswith(model):
+                    is_truncated = True
+                    break
+
+            if not is_truncated:
+                valid_models_for_brand.append(model)
+
+        models_dict[brand] = valid_models_for_brand
+
+    return models_dict
+
+
+
+
+
+def fill_unknown_brand(data, valid_models_dict):
+    """
+    Infers the 'Brand' for rows where Brand is 'Unknown' by checking the 'model' name
+    against the master dictionary of valid models per brand.
+    
+    Arguments:
+        data (pd.DataFrame): The DataFrame to process.
+        valid_models_dict (dict): Dictionary mapping brands to lists of their models.
+        
+    Output:
+        pd.DataFrame: The DataFrame with imputed brands.
+    """
+    # Select only rows where Brand is 'Unknown'
+    unknown_df = data[data['Brand'] == 'Unknown']
+    for idx, row in unknown_df.iterrows():
+        model_lower = str(row['model']).lower()
+        # Check this model against every brand's list of known models
+        for brand, models in valid_models_dict.items():
+            if model_lower in [m.lower() for m in models]:
+                # If found, update the Brand in the original dataframe
+                data.at[idx, 'Brand'] = brand
+                break
+
+    return data
+
+
+
+
+
+def impute_numeric_features(X_features_list, metric_features):
+    """
+    Imputes missing numeric values using the median strategy.
+    
+    Arguments:
+        X_features_list (list): List of DataFrames [X_train, X_val, ...].
+        metric_features (list): List of numeric column names.
+        
+    Output:
+        list: List of DataFrames with imputed values.
+    """
+    # Initialize the imputer using the median strategy
+    imputer = SimpleImputer(strategy='median')
+
+    # Select the numeric features from the training set (assumed to be at index 0)
+    X_train_numeric_to_fit = X_features_list[0][metric_features]
+
+    # Fit the imputer ONLY on the training data to prevent data leakage
+    imputer.fit(X_train_numeric_to_fit)
+
+    imputed_dfs_list = []
+
+    # Iterate through all dataframes (train, val, test) to transform them
+    for df in X_features_list:
+        # Create a copy to avoid modifying the original list in place
+        df_copy = df.copy()
+
+        # Transform the data using the fitted imputer (replace NaNs with median)
+        imputed_data_np = imputer.transform(df_copy[metric_features])
+
+        # Assign the imputed values back to the specific columns
+        df_copy[metric_features] = imputed_data_np
+
+        imputed_dfs_list.append(df_copy)
+    return imputed_dfs_list
+
+
+
+
+
+def scale_numeric_features(X_features, metric_features):
+    """
+    Scales numeric features using RobustScaler.
+    
+    Arguments:
+        X_features (list): List of DataFrames [X_train, X_val, ...].
+        metric_features (list): List of numeric column names.
+        
+    Output:
+        list: List of scaled DataFrames.
+    """
+    # Initialize the RobustScaler (good for data with outliers)
+    scaler = RobustScaler()
+
+    # Create a copy of the training set (index 0) to fit the scaler
+    X_train = X_features[0].copy()
+    
+    # Fit the scaler using only the training data
+    scaler.fit(X_train[metric_features])
+
+    scaled_features_list = []
+
+    # Transform all datasets (train, val, test) using the parameters learned from train
+    for i, X, in enumerate(X_features):
+        X_scaled = X.copy()
+        # Apply the transformation
+        X_scaled[metric_features] = scaler.transform(X[metric_features])
+        scaled_features_list.append(X_scaled)
+
+    return scaled_features_list
+
+
+
+
+
+def cor_heatmap(cor):
+    """
+    Plots a heatmap of correlations.
+    
+    Arguments:
+        cor (pd.DataFrame): Correlation matrix.
+        
+    Output:
+        None: Displays plot.
+    """
+    # Set the size of the figure
+    plt.figure(figsize=(8, 6))
+    
+    # Generate the heatmap with annotations, using a Red color map
+    sns.heatmap(data=cor, annot=True, cmap=plt.cm.Reds, fmt='.1')
+    plt.show()
+
+
+
+
+
+def testindependence1(X, y, var, alpha=0.05):
+    """
+    Tests statistical independence between two variables using Chi-Square.
+    
+    Arguments:
+        X (pd.Series): First variable.
+        y (pd.Series): Second variable.
+        var (str): Name of the variable being tested.
+        alpha (float): Significance level.
+        
+    Output:
+        None: Prints the result of the test.
+    """
+    # Create a contingency table (cross-tabulation) of the observed frequencies
+    dfObserved = pd.crosstab(y, X)
+    
+    # Perform the Chi-Square test of independence
+    chi2, p, dof, expected = stats.chi2_contingency(dfObserved.values)
+    
+    # Create a DataFrame for expected frequencies (optional, for verification)
+    dfExpected = pd.DataFrame(expected, columns=dfObserved.columns, index=dfObserved.index)
+    
+    # Check if the p-value is less than the significance level (alpha)
+    if p < alpha:
+        # Reject null hypothesis: variables are dependent (important)
+        result = "{0} is IMPORTANT for Prediction".format(var)
+    else:
+        # Fail to reject null hypothesis: variables are independent (not important)
+        result = "{0} is NOT an important predictor. (Discard {0} from model)".format(var)
+    print(result)
+
+
+
+
+
+def plot_importance(coef, title):
+    """
+    Plots feature importance.
+    
+    Arguments:
+        coef (pd.Series): Coefficients/Importance values.
+        title (str): Title of the plot.
+        
+    Output:
+        None: Displays plot.
+    """
+    # Sort the coefficients/importance values for a cleaner plot
+    imp_coef = coef.sort_values()
+    
+    # Set figure size
+    plt.figure(figsize=(10, 6))
+    
+    # Create a horizontal bar chart
+    imp_coef.plot(kind="barh")
+    
+    # Set the title and show the plot
+    plt.title(title)
+    plt.show()
+
+
+
+
+
+def analyze_rf_importance_numeric(X, y, numeric_list):
+    """
+    Analyzes feature importance using a Random Forest model.
+    
+    Arguments:
+        X (pd.DataFrame): Features.
+        y (pd.Series): Target.
+        numeric_list (list): List of numeric feature names.
+        
+    Output:
+        pd.Series: Feature importances.
+    """
+    # Initialize a Random Forest Regressor with specific parameters
+    base_rf = RandomForestRegressor(
+        n_estimators=200,
+        random_state=42,
+        n_jobs=-1
+    )
+    
+    # Fit the model to the data
+    base_rf.fit(X, y)
+    
+    # Extract feature importance scores from the trained model
+    importances = base_rf.feature_importances_
+    
+    # Create a Series mapping feature names to their importance scores
+    coef_rf = pd.Series(importances, index=numeric_list)
+
+    print("\nImportance of Numeric Features:")
+    print(coef_rf.sort_values(ascending=False))
+    
+    # Plot the importances using the helper function
+    plot_importance(coef_rf, "Random Forest 'Base' Feature Importance (Numéricas)")
+
+    return coef_rf
+
+
+
+
+
+def remove_columns(dfs):
+    """
+    Removes 'tax' and 'previousOwners' columns from a list of DataFrames.
+    
+    Arguments:
+        dfs (list): List of DataFrames.
+        
+    Output:
+        None: Modify in-place.
+    """
+    # Define the list of columns that need to be dropped
+    columns_to_remove = ["tax", "previousOwners"]
+    
+    # Iterate through each DataFrame in the provided list
+    for X in dfs:
+        # Drop the specified columns. axis=1 means columns, inplace=True modifies the object directly.
+        X = X.drop(columns_to_remove, axis=1, inplace=True)
+        
+    print('"tax","previousOwners" columns were removed sucessfully.')
+
+
+
+
+
+def aplicar_ordinal_encoder(X_train, X_val, X_test):
+    """
+    Applies Ordinal Encoding to the datasets.
+    
+    Arguments:
+        X_train (pd.DataFrame): Training set.
+        X_val (pd.DataFrame): Validation set.
+        X_test (pd.DataFrame): Test set.
+        
+    Output:
+        tuple: (X_train_encoded, X_val_encoded, X_test_encoded)
+    """
+    # Initialize the OrdinalEncoder. 
+    # 'use_encoded_value' allows handling unknown categories by setting them to -1.
+    encoder = OrdinalEncoder(
+        handle_unknown='use_encoded_value',
+        unknown_value=-1,
+        dtype=int
+    )
+
+    # Fit the encoder using only the training data to learn the categories
+    encoder.fit(X_train)
+
+    # Print the categories found for each column for verification purposes
+    for i, col in enumerate(X_train.columns):
+        print(f"  {col}: {encoder.categories_[i]}")
+
+    # Transform the training, validation, and test sets using the fitted encoder
+    X_train_encoded = encoder.transform(X_train)
+    X_val_encoded = encoder.transform(X_val)
+    X_test_encoded = encoder.transform(X_test)
+
+    return X_train_encoded, X_val_encoded, X_test_encoded
+
+
+
+
+
+def running_models(X_train, y_train, X_val, y_val):
+    """
+    Trains and evaluates models defined in the global 'models' dictionary.
+    
+    Arguments:
+        X_train (pd.DataFrame): Training features.
+        y_train (pd.Series): Training target.
+        X_val (pd.DataFrame): Validation features.
+        y_val (pd.Series): Validation target.
+        
+    Output:
+        None: Updates the global 'results' dictionary and prints metrics.
+    """
+    # Iterate over the global dictionary of models
+    for name, model in models.items():
+        # Train the model using the training data
+        model.fit(X_train, y_train)
+
+        # Generate predictions using the validation set
+        y_pred_val = model.predict(X_val)
+        
+        # Calculate performance metrics
+        r2 = r2_score(y_val, y_pred_val)
+        mae = mean_absolute_error(y_val, y_pred_val)
+        rmse = np.sqrt(mean_squared_error(y_val, y_pred_val))
+        
+        # Store the results in the global 'results' dictionary
+        results[name] = {"R²": r2, "MAE": mae, "RMSE": rmse,
+                         ##"pred": y_pred_val
+                         }
+        
+        # Print the metrics for the current model
+        print(f"\nResults for: {name}")
+        print(f"  R²:   {r2:.4f}")
+        print(f"  MAE:  {mae:.2f}")
+        print(f"  RMSE: {rmse:.2f}")
+
+
+
+
+
+def dict_to_results_df(results_dict, sort_by="R²", ascending=False, display_df=False):
+    """
+    Converts the results dictionary to a DataFrame for visualization.
+    
+    Arguments:
+        results_dict (dict): Dictionary of results.
+        sort_by (str): Column to sort by.
+        ascending (bool): Sort order.
+        display_df (bool): Whether to display the DataFrame.
+        
+    Output:
+        pd.DataFrame: The results table.
+    """
+    # Convert dictionary to DataFrame, transpose it, and reset index to make model names a column
+    df = pd.DataFrame(results_dict).T.reset_index().rename(columns={"index": "Model"})
+
+    # Define rounding precision for each metric
+    rounding = {"R²": 5, "MAE": 2, "RMSE": 2}
+
+    # Apply rounding to the columns if they exist in the DataFrame
+    for col, digits in rounding.items():
+        if col in df.columns:
+            df[col] = df[col].round(digits)
+
+    # Sort the DataFrame based on the specified column
+    if sort_by in df.columns:
+        df = df.sort_values(by=sort_by, ascending=ascending).reset_index(drop=True)
+
+    # Optionally display the DataFrame (useful in Jupyter Notebooks)
+    if display_df:
+        display(df)
+
+    return df
+
+
+
+
+
+def tune_models(models_params, X_train, y_train, cv, scoring='neg_mean_absolute_error', n_iter=50):
+    """
+    Receives a dictionary with models and their parameters, performs RandomizedSearchCV, 
+    and returns a dictionary with the best trained models.
+    Shows progress bar with tqdm.
+
+    Arguments:
+        models_params (dict): Dict of models and params.
+        X_train (pd.DataFrame): Training features.
+        y_train (pd.Series): Training target.
+        cv (int): Cross-validation splits.
+        scoring (str): Scoring metric.
+        n_iter (int): Number of iterations.
+
+    Output:
+        dict: Best models found.
+    """
+    best_models = {}
+    n_splits = cv.get_n_splits()
+    
+    # Iterate through the models and their parameter grids
+    for name, (model, param_grid) in tqdm(models_params.items(), desc="Training models", unit="model"):
+        # Configure the Randomized Search Cross-Validation
+        search = RandomizedSearchCV(
+            estimator=model,
+            param_distributions=param_grid,
+            n_iter=n_iter,
+            cv=cv,
+            scoring=scoring,
+            n_jobs=-1,
+            verbose=0,
+            random_state=42
+        )
+        total_fits = n_iter * n_splits  # Calculate total fits for progress tracking
+
+        # Fit the search algorithm to the training data
+        # with tqdm_joblib(tqdm(total=total_fits, desc=f"Random Search {name}", leave=False)):
+        search.fit(X_train, y_train)
+
+        # Print the best score (negated because scoring is negative MAE) and best parameters
+        print(f"Melhor score {name}: {-search.best_score_:.4f}")
+        print(f"Melhor parâmetros: {search.best_params_}")
+
+        # Store the fitted search object in the dictionary
+        best_models[name] = search
+
+    return best_models
