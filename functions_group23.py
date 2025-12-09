@@ -709,3 +709,17 @@ def tune_models(models_params, X_train, y_train, cv, scoring='neg_mean_absolute_
         best_models[name] = search
 
     return best_models
+
+
+
+def create_new_features(df):
+    df = df.copy()
+    current_year = df['year'].max() + 1
+
+    df['car_age'] = current_year - df['year']
+
+    df['miles_per_year'] = df['mileage'] / (df['car_age'] + 0.1)
+
+    df['power_efficiency'] = df['engineSize'] / (df['mpg'] + 1)
+
+    return df
