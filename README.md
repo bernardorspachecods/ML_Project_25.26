@@ -30,15 +30,12 @@
 4- rui
 - refazer stacking
 - markdown V.conclusion
-
-
 - markdown abstract
+
+no fim:
 - markdown group contribution
 
-- Outline, estruturar o relatóri
-- Cross Validation
-- Perceber diferentes inputers, scalers, encoders
-- enssembles
+
 
 <br><br>
 
