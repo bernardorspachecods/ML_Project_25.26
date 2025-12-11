@@ -715,7 +715,7 @@ def tune_models(models_params, X_train, y_train, cv, scoring='neg_mean_absolute_
 
 
 def create_new_features(df):
-    df = df.copy()
+
     current_year = df['year'].max() + 1
 
     df['car_age'] = current_year - df['year']
