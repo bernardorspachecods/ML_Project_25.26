@@ -3,11 +3,6 @@
 ### TODO
 - ao fazer o markdown: nas conclusoes evitar explicacoes teoricas ou seja de materia que o prof já sabe; dizer porque é que fizemos o código que fizemos (qual a intenção) e o que vamos fazer a seguir quanto a isto (actionables)
 
-
-
-- colocar arvore de decisao bonita depois dos modelos
-
-
 1- bernardo
 - reestruturar
 - ✔️ colocar o multivariate analysis antes do scalling
@@ -26,6 +21,7 @@
 - fazer funcao para a feature selection: hist gradient boosting nao tem feature importance (mencionar que queriamos fazer mas nao havia)
 - mudar markdown da feature selection e depois da conclusao colocar o codigo do metrci_features.remove(tax ,...)
 - markdown III. regression benchmarking
+- melhorar grafico da pipeline e meter no notebook
 
 4- rui
 - refazer stacking
@@ -34,6 +30,8 @@
 
 no fim:
 - markdown group contribution
+- confirmar que todas as funcoes têm documentação e comentários
+- colocar arvore de decisao bonita depois dos modelos
 
 
 
