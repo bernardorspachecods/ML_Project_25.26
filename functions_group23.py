@@ -33,7 +33,7 @@ def strange_values_to_nan(f, column, limit):
         None: The function modifies the DataFrame 'f' in-place.
     """
     # Create a boolean mask where True indicates "strange" values (<= limit)
-    strange_values = f[column] <= limit
+    strange_values = f[column] < limit
     
     # Replace the identified values with NaN
     f.loc[strange_values, column] = np.nan
@@ -71,6 +71,8 @@ def pre_processing_metric(df):
     strange_values_to_nan(df, "mpg", 10)
     strange_values_to_nan(df, "engineSize", 0.1)
     strange_values_to_nan(df, "previousOwners", 0)
+    strange_year = df["year"] > 2020
+    df.loc[strange_year, "year"] = np.nan
 
     # Deleting column hasDamage because it has the same value in all rows
     del df["hasDamage"]
