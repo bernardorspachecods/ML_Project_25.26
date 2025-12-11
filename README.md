@@ -10,12 +10,12 @@
 
 1- bernardo
 - reestruturar
-- colocar o multivariate analysis antes do scalling
-- titulo de regression benchmarking tem que vir mais para baixo
-- atualizar índice
-- mudar nome do ficheiro das function
-- tirar carros deepois de 2020 (ver % antes de tirar)
-- markdown II. data exploration and preprocessing
+- ✔️ colocar o multivariate analysis antes do scalling
+- ✔️ titulo de regression benchmarking tem que vir mais para baixo
+- ✔️ atualizar índice
+- ✔️ mudar nome do ficheiro das function
+- ✔️ tirar carros deepois de 2020 (ver % antes de tirar)
+- ✔️ markdown II. data exploration and preprocessing
 
 2- alex
 - markdown: fazer markdown do I. identifying business needs
@@ -41,3 +41,4 @@ no fim:
 
 **Google Drive Link**
 https://drive.google.com/drive/u/1/folders/1OpR6JzF386B8XsQ7KEHcDzljUVAZQhMg
+
