@@ -5,16 +5,18 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, StackingRegressor, ExtraTreesRegressor
 from sklearn.impute import KNNImputer
-from sklearn.preprocessing import RobustScaler, OrdinalEncoder
+from sklearn.preprocessing import RobustScaler, OrdinalEncoder, MinMaxScaler
+from sklearn.linear_model import LinearRegression, LassoCV
+from sklearn.feature_selection import RFE
+from sklearn.feature_selection import mutual_info_regression
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from rapidfuzz import process, fuzz
 from tqdm import tqdm
 from IPython.display import display # Necessário para a função dict_to_results_df funcionar num script
 from tqdm_joblib import tqdm_joblib
-
 
 ########## Functions ##########
 
@@ -391,7 +393,223 @@ def scale_numeric_features(X_features, metric_features):
 
     return scaled_features_list
 
+#-----------
+# feature selection functions
 
+def get_spearman(X_num, y):
+    """
+    Calculates the spearman rank correlation between numeric features and the target.
+
+    Arguments:
+        X_num (pd.DataFrame): DataFrame containing only numeric features.
+        y (pd.Series): The target variable.
+
+    Output:
+        pd.Series: Correlation coefficients between each feature and the target.
+    """
+    df_temp = X_num.copy()
+    df_temp['TARGET'] = y.values
+
+    # selects only the correlations with the target, and removes the targets self-correlation
+    corr = df_temp.corr(method='spearman')['TARGET'].drop('TARGET')
+    return corr
+
+# linear models
+
+def _get_lasso(X_num, y):
+    """Calculates Lasso regression coefficients to identify important numeric features.
+    
+    Arguments:
+        X_num (pd.DataFrame): DataFrame containing only numeric features.
+        y (pd.Series): The target variable.
+
+    Output:
+        pd.Series: Absolute values of the coefficients for each feature.
+    """
+
+    lasso = LassoCV(cv=5, random_state=42).fit(X_num, y)
+    return pd.Series(np.abs(lasso.coef_), index=X_num.columns) # returns absolute value since magnitude matters more than the signal
+
+def _get_rfe(X_num, y):
+    """Calculates RFE ranking for numeric features.
+
+    Arguments:
+        X_num (pd.DataFrame): DataFrame containing only numeric features.
+        y (pd.Series): The target variable.
+
+    Output:
+        pd.Series: The ranking of features (1 = Most Important, higher numbers = Less Important).
+    """
+
+    model = LinearRegression()
+    rfe = RFE(estimator=model, n_features_to_select=1) # Força a rankear tudo
+    rfe.fit(X_num, y)
+
+    # in this output, lower is better
+    # we will invert this later in the main function to match other metrics (where higher is better).
+    return pd.Series(rfe.ranking_, index=X_num.columns)
+
+# decision trees
+
+def _get_model_importance(model_class, X_encoded, y):
+    """
+    Generic helper function to train a tree-based model and extract feature importance.
+
+    Arguments:
+        model_class (class): The Scikit-Learn model class (e.g., RandomForestRegressor).
+        X_encoded (pd.DataFrame): The input features (must be fully numeric/encoded).
+        y (pd.Series): The target variable.
+
+    Output:
+        pd.Series: The feature importance scores extracted from the trained model.
+    """
+   
+    model = model_class(random_state=42)
+    
+    # checks if the model supports parallel processing (GradientBoostingRegressor doesnt)
+    if 'n_jobs' in model.get_params():
+        model.set_params(n_jobs=-1) # n_jobs=-1 uses all available CPU cores for faster training
+        
+    model.fit(X_encoded, y)
+    
+    return pd.Series(model.feature_importances_, index=X_encoded.columns)
+
+# calculating importance for linear models and decision trees
+
+def calculate_importances(X_num, X_cat, y):
+    """
+    Runs multiple models (Linear and Tree-based), aggregates the importance scores, handles specific preprocessing for trees,
+    and returns a normalized DataFrame for easy comparison.
+
+    Arguments:
+        X_num (pd.DataFrame): Numeric features (already scaled).
+        X_cat (pd.DataFrame): Categorical features.
+        y (pd.Series): Target variable.
+
+    Output:
+        pd.DataFrame: A normalized (0-1) table of feature importances across all models.
+    """
+    print("Calculating importances...")
+    results = {}
+
+    # linear methods (for numeric features)
+    # we exclude categorical features from linear method because:
+    # - if we apply ordinal encoding to a nominal category, the model incorrectly assumes a mathematical relationship
+    # - if we apply one hot encoding it creates lots of one-hot columns 
+    # so we use tree models to evaluate categories
+    if not X_num.empty:
+        results['Lasso'] = _get_lasso(X_num, y)
+        results['RFE'] = _get_rfe(X_num, y)
+    
+    # tree models (for numeric and categorical features)
+    # tree-based models dont perform mathematical operations on features
+    # they make logical splits, so we can use ordinal encoding
+    X_all = pd.concat([X_num, X_cat], axis=1)
+    
+    text_cols = X_all.select_dtypes(include=['object', 'category']).columns
+    if len(text_cols) > 0:
+        encoder = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
+        X_all[text_cols] = encoder.fit_transform(X_all[text_cols].astype(str))
+
+    # calls the helper function we defined earlier
+    results['RandomForest'] = _get_model_importance(RandomForestRegressor, X_all, y)
+    results['ExtraTrees'] = _get_model_importance(ExtraTreesRegressor, X_all, y)
+    results['GradBoosting'] = _get_model_importance(GradientBoostingRegressor, X_all, y)
+
+    df = pd.DataFrame(results).fillna(0)
+    
+    # inverts RFE Ranking so that RFE gives 1 for the best feature
+    if 'RFE' in df.columns:
+        df['RFE'] = 1 / (df['RFE'].replace(0, 1))
+
+    return pd.DataFrame(MinMaxScaler().fit_transform(df), columns=df.columns, index=df.index)
+
+# plots the linear analysis and non linear
+
+def plot_dashboard_strategy(df_norm, corr_matrix, numeric_features_list):
+    """
+    Generates a dashboard comprising two main figures.
+
+    Figure 1 (Linear Analysis):
+        - Left panel: Spearman Correlation Matrix to inspect multicollinearity between all numeric features.
+        - Right panel: Feature Importance from Linear Models (Lasso & RFE), applied only to numeric features.
+    
+    Figure 2 (Non-Linear):
+        - Bottom panel: A consolidated view of feature importance derived from Tree-based models 
+          (Random Forest, Extra Trees, Gradient Boosting). 
+
+    Arguments:
+        df_norm (pd.DataFrame): DataFrame containing normalized importance scores (0-1) for all models.
+        corr_matrix (pd.DataFrame): Pre-calculated Spearman correlation matrix (All vs All).
+        numeric_features_list (list): List of names of numeric features (used to filter the linear plot).
+    """
+    print("Generating analysis dashboard...")
+
+    # figure 1
+    fig, axes = plt.subplots(1, 2, figsize=(22, 9), gridspec_kw={'width_ratios': [1.2, 1]}) #gives more horizontal space to spearman
+    
+    # left plot
+    # correlation matrix
+    sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', vmin=-1, vmax=1, 
+                fmt='.2f', ax=axes[0], cbar_kws={'label': 'Spearman Correlation'})
+    
+    axes[0].set_title("1. Correlation matrix (Spearman)", fontsize=14, fontweight='bold')
+    
+    # right plot
+    # rfe and lasso plots
+    linear_methods = ['Lasso', 'RFE']
+    valid_num = [f for f in numeric_features_list if f in df_norm.index]
+    
+    if valid_num:
+        # selects rows corresponding to numeric features and columns
+        df_lin = df_norm.loc[valid_num, linear_methods]
+        
+        if not df_lin.empty:
+            # calculates average importance for sorting 
+            df_lin['Avg'] = df_lin.mean(axis=1)
+            df_lin_sorted = df_lin.sort_values(by='Avg', ascending=True).drop(columns=['Avg'])
+            
+            palette_lin = ['#1f77b4', '#d62728'] # blue, red
+            
+            # plot on the right axis 
+            df_lin_sorted.plot(kind='barh', width=0.8, color=palette_lin, ax=axes[1])
+            
+            axes[1].set_title("2. Linear feature importance (Lasso and RFE)", fontsize=14, fontweight='bold')
+            axes[1].set_xlabel("Normalized importance (0 to 1)")
+            axes[1].grid(axis='x', linestyle='--', alpha=0.5)
+            axes[1].legend(bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0)
+    
+    plt.tight_layout()
+    plt.show()
+
+    # figure 2
+    # tree models
+    # from the 5 models that we used later on stacking:
+    # - we selected RandomForest, ExtraTrees, and GradientBoosting because they all share 
+    # the .feature_importances_ metric (this garantees that the resulting scores in the bar charts are comparable)
+    # - we didnt select HistGradientBoosting because it doesent have the .feature_importances_ attribute and KNN because
+    # it uses geometric distance, not tree splits, that is not directly comparable here
+    tree_methods = ['RandomForest', 'ExtraTrees', 'GradBoosting']
+    tree_cols = [c for c in tree_methods if c in df_norm.columns]
+    
+    if tree_cols:
+        df_trees = df_norm[tree_cols].copy()
+        # calculates the average importance across the three tree models to sort
+        df_trees['Avg'] = df_trees.mean(axis=1)
+        df_trees_sorted = df_trees.sort_values(by='Avg', ascending=True).drop(columns=['Avg']).tail(15)
+        
+        my_palette = ['#1f77b4', '#ff7f0e', '#2ca02c'] # blue, orange, green
+        
+        plt.figure(figsize=(14, 10))
+        df_trees_sorted.plot(kind='barh', width=0.92, color=my_palette, figsize=(14, 10))
+        
+        plt.title("3. Non-linear feature importance (tree-based)", fontsize=16, fontweight='bold')
+        plt.xlabel("Normalized importance (0 to 1)", fontsize=12)
+        plt.legend(bbox_to_anchor=(1.01, 1), loc='upper left')
+        plt.grid(axis='x', linestyle='--', alpha=0.5)
+        plt.tight_layout()
+        plt.show()
+#----
 
 
 
