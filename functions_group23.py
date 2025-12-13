@@ -489,7 +489,6 @@ def calculate_importances(X_num, X_cat, y):
     Output:
         pd.DataFrame: A normalized (0-1) table of feature importances across all models.
     """
-    print("Calculating importances...")
     results = {}
 
     # linear methods (for numeric features)
@@ -543,7 +542,6 @@ def plot_dashboard_strategy(df_norm, corr_matrix, numeric_features_list):
         corr_matrix (pd.DataFrame): Pre-calculated Spearman correlation matrix (All vs All).
         numeric_features_list (list): List of names of numeric features (used to filter the linear plot).
     """
-    print("Generating analysis dashboard...")
 
     # figure 1
     fig, axes = plt.subplots(1, 2, figsize=(22, 9), gridspec_kw={'width_ratios': [1.2, 1]}) #gives more horizontal space to spearman
