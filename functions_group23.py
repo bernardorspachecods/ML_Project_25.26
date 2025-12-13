@@ -934,11 +934,12 @@ def tune_models(models_params, X_train, y_train, cv, scoring='neg_mean_absolute_
 
 def create_new_features(df):
 
-    current_year = df['year'].max() + 1
+    current_year = 2020
+    df['log_mileage'] = np.log1p(df['mileage'])
 
     df['car_age'] = current_year - df['year']
-
-    df['miles_per_year'] = df['mileage'] / (df['car_age'] + 0.1)
+    df['age_squared'] = df['car_age'] ** 2
+    df['miles_per_year'] = df['log_mileage'] / (df['car_age'] + 0.1)
 
     df['power_efficiency'] = df['engineSize'] / (df['mpg'] + 1)
 
