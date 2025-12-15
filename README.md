@@ -34,7 +34,11 @@ The project uses a subset of real-world data from 2020 and follows a complete **
 
 ## Machine Learning Pipeline
 
-All reusable logic is implemented in `functions_group23.py` and imported into the notebook to ensure consistency and avoid code duplication.
+All reusable logic is implemented in `functions_group23.py` and imported into the notebook to ensure consistency and avoid code duplication. The flowchart of the pipeline is illustred bellow:
+
+<p align="center">
+  <img src="flowchart.png" width="100%" alt="Machine Learning Pipeline Flowchart">
+</p>
 
 ### 1. Data Exploration and Cleaning
 
