@@ -300,7 +300,7 @@ def fill_unknown_brand(data, valid_models_dict):
     
     Arguments:
         data (pd.DataFrame): The DataFrame to process.
-        valid_models_dict (dict): Dictionary mapping brands to lists of their models.
+        valid_models_dict (dict): Dictionary mapping brands to lists of their models, that was predefined .
         
     Output:
         pd.DataFrame: The DataFrame with imputed brands.
